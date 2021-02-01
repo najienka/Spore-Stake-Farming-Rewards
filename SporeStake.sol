@@ -443,13 +443,13 @@ interface IERC900 {
 //https://eips.ethereum.org/EIPS/eip-2917
 interface IERC2917 {
 
-    event InterestRatePerBlockChanged (uint oldValue, uint newValue);
+    event InterestRatePerBlockChanged (uint256 oldValue, uint256 newValue);
 
-    function interestsPerBlock() external view returns (uint);
+    function interestsPerBlock() external view returns (uint256);
     function changeInterestRatePerBlock(uint value) external returns (bool);
-    function getProductivity(address user) external view returns (uint, uint);
-    function take() external view returns (uint);
-    function takeWithBlock() external view returns (uint, uint);
+    function getProductivity(address user) external view returns (uint256, uint256);
+    function take() external view returns (uint256);
+    function takeWithBlock() external view returns (uint256, uint256);
 }
 
 contract ERC20 is Context, IERC20 {
@@ -593,7 +593,8 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
     
     struct SporeStakerInfo {
         uint256 totalAmountStaked;
-        uint256 totalPaidReward;
+        uint256 rewardPending;
+        uint256 rewardDebt;
     }
     
     struct Checkpoint {
@@ -646,8 +647,13 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
         updateCheckpointAtNow(stakeHistory, amount, false);
         
         SporeStakerInfo storage staker = stakers[_msgSender()];
+        if (staker.totalAmountStaked > 0) {
+            uint256 pending = staker.totalAmountStaked.mul(accAmountPerShare).div(1e18).sub(staker.rewardDebt);
+            staker.rewardPending = staker.rewardPending.add(pending);
+        }
         
         staker.totalAmountStaked = staker.totalAmountStaked.add(amount);
+        staker.rewardDebt = staker.totalAmountStaked.mul(accAmountPerShare).div(1e18);
         _totalStaked = _totalStaked.add(amount);
         
         emit Staked(_msgSender(), amount, staker.totalAmountStaked, data);
@@ -661,8 +667,12 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
         updateCheckpointAtNow(stakeHistory, amount, true);
         
         SporeStakerInfo storage staker = stakers[_msgSender()];
+       
+        uint256 pending = staker.totalAmountStaked.mul(accAmountPerShare).div(1e18).sub(staker.rewardDebt);
+        staker.rewardPending = staker.rewardPending.add(pending);
         
         staker.totalAmountStaked = staker.totalAmountStaked.sub(amount);
+        staker.rewardDebt = staker.totalAmountStaked.mul(accAmountPerShare).div(1e18);
         _totalStaked = _totalStaked.sub(amount);
         
         emit Unstaked(_msgSender(), amount, staker.totalAmountStaked, data);
@@ -776,7 +786,8 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
             uint256 reward = multiplier.mul(_blockReward);
             _accAmountPerShare = _accAmountPerShare.add(reward.mul(1e18).div(_totalStaked));
         }
-        return staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.totalPaidReward);
+        
+        return staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.rewardDebt).add(staker.rewardPending);
     }
 
     function takeWithAddress(address user) external view returns (uint256) {
@@ -788,7 +799,7 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
             uint256 reward = multiplier.mul(_blockReward);
             _accAmountPerShare = _accAmountPerShare.add(reward.mul(1e18).div(_totalStaked));
         }
-        return staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.totalPaidReward);
+        return staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.rewardDebt).add(staker.rewardPending);
     }
 
     function takeWithBlock() external override view returns (uint256, uint256) {
@@ -800,27 +811,23 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
             uint256 reward = multiplier.mul(_blockReward);
             _accAmountPerShare = _accAmountPerShare.add(reward.mul(1e18).div(_totalStaked));
         }
-        return (staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.totalPaidReward), block.number);
+        return (staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.rewardDebt).add(staker.rewardPending), block.number);
     }
     
     function claim() public nonReentrant whenNotPaused update {
         SporeStakerInfo storage staker = stakers[_msgSender()];
         
-        uint256 _accAmountPerShare = accAmountPerShare;
+        uint256 _amount = staker.totalAmountStaked.mul(accAmountPerShare).div(1e18);
+        uint256 _pending = _amount.sub(staker.rewardDebt).add(staker.rewardPending);
         
-        if (block.number > lastRewardBlock && _totalStaked != 0) {
-            uint256 multiplier = block.number.sub(lastRewardBlock);
-            uint256 reward = multiplier.mul(_blockReward);
-            _accAmountPerShare = _accAmountPerShare.add(reward.mul(1e18).div(_totalStaked));
-        }
         
-        uint256 _amount = staker.totalAmountStaked.mul(_accAmountPerShare).div(1e18).sub(staker.totalPaidReward);
-        
-        if(_amount > 0) {
-            SPORE.mint(_msgSender(), _amount);
-            staker.totalPaidReward = staker.totalPaidReward.add(_amount);
+        if(_pending > 0) {
             
-            emit PaymentRequested(_msgSender(), _amount);
+            SPORE.mint(_msgSender(), _pending);
+            staker.rewardDebt = _amount;
+            staker.rewardPending = 0;
+            
+            emit PaymentRequested(_msgSender(), _pending);
         }
     }
     
