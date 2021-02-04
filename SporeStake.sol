@@ -769,12 +769,20 @@ contract SporeStake is IERC900, IERC2917, AccessControl, ReentrancyGuard, Pausab
         return true;
     }
     
-    function getProductivity(address user) external override view returns (uint, uint) {
+    function getProductivity(address user) external override view returns (uint256, uint256) {
         return (stakers[user].totalAmountStaked, _totalStaked);
     }
 
-    function interestsPerBlock() external override view returns (uint) {
+    function interestsPerBlock() external override view returns (uint256) {
         return accAmountPerShare;
+    }
+    
+    function rewardPerBlock() public view returns (uint256) {
+        return _blockReward;
+    }
+    
+    function stakerShare(address user) public view returns (uint256) {
+        return stakers[user].totalAmountStaked.mul(accAmountPerShare).div(1e18);
     }
 
     function take() external override view returns (uint256) {
